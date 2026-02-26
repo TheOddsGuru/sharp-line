@@ -716,18 +716,22 @@ function analyze(g){
     conf+=4;
   }
 
-  var dogEdgeThresh=isNBA?1:0.5;
+  var dogEdgeThresh=isNBA?0.7:0.5;
   if(pickIsDog&&spreadEdge>=dogEdgeThresh){
     var dogBonus=0;
     function recWPdog(rec){if(!rec)return 0.5;var p=rec.match(/(\d+)-(\d+)/);if(!p)return 0.5;return(+p[1])/(+p[1]+ +p[2])||0.5;}
     var dogWP=recWPdog(spreadSide==="away"?g.aRec:g.hRec);
     var favWPv=recWPdog(spreadSide==="away"?g.hRec:g.aRec);
     var isDogHome=(spreadSide==='home'&&g.favAway);
+    var dogHasSharp=(rlm||gotCLV||steam);
 
     if(dogWP<0.25){
       dogBonus-=20;
-    }else if(dogWP<0.38){
+    }else if(dogWP<0.33){
       dogBonus-=10;
+    }else if(dogWP<0.38){
+      if(dogHasSharp&&spreadEdge>=2)dogBonus-=2;
+      else dogBonus-=10;
     }else{
       valuePlay=true;
       if(isDogHome&&!isNBA){
@@ -747,6 +751,10 @@ function analyze(g){
       if(favInjPts>=3){dogBonus+=8;signalCount++;}
       else if(favInjPts>=2){dogBonus+=4;}
     }
+    if(g.spread<=3&&dogWP>=0.45){dogBonus+=6;signalCount++;}
+    else if(g.spread<=3&&dogWP>=0.40){dogBonus+=3;}
+    if(pickIsDog&&rlm){dogBonus+=8;signalCount++;sharpPlay=true;}
+    if(pickIsDog&&gotCLV&&clv>=0.5){dogBonus+=6;signalCount++;}
     dogBonus=Math.min(dogBonus,30);
     conf+=dogBonus;
   }else{
