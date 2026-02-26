@@ -391,7 +391,7 @@ function estimateSharpSignals(g){
   var isNBA=g.league==='NBA';
   var baseTempo=isNBA?100:68;
   var baseTotal=isNBA?220:140;
-  var HCA=isNBA?2.5:1.8;
+  var HCA=isNBA?2.5:3.5;
 
   function hashStr(s){var h=0;for(var i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;}return h;}
   var seed=Math.abs(hashStr(g.away+g.home+TODAY.toDateString()));
@@ -468,6 +468,40 @@ function cacheOpeningLine(g){
   return g;
 }
 
+function parseRecordStreaks(rec){
+  if(!rec)return{wp:0.5,last5:0.5,gamesPlayed:0,isHot:false,isCold:false};
+  var p=rec.match(/(\d+)-(\d+)/);
+  if(!p)return{wp:0.5,last5:0.5,gamesPlayed:0,isHot:false,isCold:false};
+  var w=+p[1],l=+p[2],gp=w+l;
+  var wp=gp>0?w/gp:0.5;
+  var last5wp=wp;
+  if(gp>=10){
+    var recentW=Math.round(wp*5);
+    last5wp=recentW/5;
+  }
+  return{wp:wp,last5:last5wp,gamesPlayed:gp,isHot:wp>=0.65&&gp>=10,isCold:wp<=0.35&&gp>=10};
+}
+
+function detectSituationalEdge(g){
+  var edge={restAdv:0,momentumAdv:0,b2bPenalty:0,confTournament:false,rivalryGame:false,homeCourtBoost:0};
+  var isNBA=g.league==='NBA';
+  var aMom=parseRecordStreaks(g.aRec);
+  var hMom=parseRecordStreaks(g.hRec);
+  if(hMom.isHot&&aMom.isCold)edge.momentumAdv=3;
+  else if(hMom.isHot&&!aMom.isHot)edge.momentumAdv=1.5;
+  else if(aMom.isHot&&hMom.isCold)edge.momentumAdv=-3;
+  else if(aMom.isHot&&!hMom.isHot)edge.momentumAdv=-1.5;
+  var wpDiff=hMom.wp-aMom.wp;
+  if(Math.abs(wpDiff)>0.15)edge.momentumAdv+=(wpDiff>0?1:-1)*Math.min(Math.abs(wpDiff)*4,2);
+  if(!isNBA){
+    var now=TODAY.getMonth();
+    if(now>=1&&now<=2)edge.confTournament=true;
+    edge.homeCourtBoost=1.0;
+    if(hMom.wp>=0.75&&hMom.gamesPlayed>=15)edge.homeCourtBoost=1.8;
+  }
+  return edge;
+}
+
 function checkDayChange(){
   var now=new Date();
   if(now.toDateString()!==TODAY.toDateString()){
@@ -503,8 +537,8 @@ function purgeOldLocalStorage(){
 
 function analyze(g){
   var isNBA=g.league==="NBA";
-  var HCA=isNBA?2.5:1.8;
-  var injMult=isNBA?1.2:0.9;
+  var HCA=isNBA?2.5:3.5;
+  var injMult=isNBA?1.2:1.0;
   var hasEff=g.awayOE&&g.homeOE&&g.awayDE&&g.homeDE&&g.awayT&&g.homeT;
   var adjSpread,adjTotal;
   if(hasEff){
@@ -517,7 +551,18 @@ function analyze(g){
     adjSpread=Math.round((lineSpreadRef+((rawSpread-lineSpreadRef)*0.50))*10)/10;
     adjTotal=Math.round((g.total+((rawTotal-g.total)*0.50))*10)/10;
   }else{
-    adjSpread=g.favHome?-g.spread:g.spread;
+    function recParse(rec){if(!rec)return{wp:0.5,gp:0};var p=rec.match(/(\d+)-(\d+)/);if(!p)return{wp:0.5,gp:0};var w=+p[1],l=+p[2],gp=w+l;return{wp:gp>0?w/gp:0.5,gp:gp};}
+    var aR=recParse(g.aRec),hR=recParse(g.hRec);
+    var prior=8;
+    var aRegWP=(aR.wp*aR.gp+0.5*prior)/(aR.gp+prior);
+    var hRegWP=(hR.wp*hR.gp+0.5*prior)/(hR.gp+prior);
+    var K=isNBA?24:28;
+    var aPow=(aRegWP-0.5)*K;
+    var hPow=(hRegWP-0.5)*K;
+    var rawRecSpread=aPow-hPow-HCA;
+    var lineSpreadRef=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
+    var blendW=isNBA?0.35:0.50;
+    adjSpread=Math.round((lineSpreadRef+(rawRecSpread-lineSpreadRef)*blendW)*10)/10;
     adjTotal=g.total;
   }
   var aLeaders=(g.teamLeaders&&g.teamLeaders.away)||[];
@@ -526,10 +571,17 @@ function analyze(g){
   var hInj=injImpact(g.injuries?g.injuries.home||g.injHome:[],hLeaders);
   adjSpread=Math.round((adjSpread-aInj*injMult+hInj*injMult)*10)/10;
   adjTotal=Math.round((adjTotal-aInj*0.6-hInj*0.6)*10)/10;
+  var sit=detectSituationalEdge(g);
+  g._sit=sit;
+  adjSpread=Math.round((adjSpread-sit.momentumAdv*0.3)*10)/10;
+  if(!isNBA&&sit.homeCourtBoost>0){
+    adjSpread=Math.round((adjSpread-sit.homeCourtBoost*0.4)*10)/10;
+  }
   var lineSpread=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
   var spreadEdge=Math.round(Math.abs(adjSpread-lineSpread)*10)/10;
   var spreadSide=adjSpread<lineSpread?"home":"away";
-  if(Math.abs(adjSpread-lineSpread)<0.3){spreadSide="none";spreadEdge=0;}
+  var deadZone=isNBA?0.3:0.2;
+  if(Math.abs(adjSpread-lineSpread)<deadZone){spreadSide="none";spreadEdge=0;}
   var totalEdge=Math.round(Math.abs(adjTotal-g.total)*10)/10;
   var totalSide=adjTotal>g.total?"over":"under";
   if(Math.abs(adjTotal-g.total)<0.5){totalSide="none";totalEdge=0;}
@@ -561,9 +613,9 @@ function analyze(g){
   if(spreadSide!=="none"){
     var pickingFav=(spreadSide==="home"&&g.favHome)||(spreadSide==="away"&&g.favAway);
     if(pickingFav){
-      if(g.spread>=10){
+      if(isNBA&&g.spread>=10){
         contrarianFlip=true;
-      }else if(g.spread>=7){
+      }else if(isNBA&&g.spread>=7){
         var favPubPct=spreadSide==="home"?pubHome:pubAway;
         if(favPubPct>=65)contrarianFlip=true;
       }
@@ -617,6 +669,8 @@ function analyze(g){
     if(g.spread>=10)conf+=6;
   }
 
+
+
   if(hasEff&&spreadEdge>=0.5){conf+=6;signalCount++;}
 
   if(spreadEdge>=4){conf+=35;signalCount++;}
@@ -662,35 +716,39 @@ function analyze(g){
     conf+=4;
   }
 
-  if(pickIsDog&&spreadEdge>=1){
-    valuePlay=true;
-    if(pickML>=250){conf+=22;signalCount++;}
-    else if(pickML>=200){conf+=18;signalCount++;}
-    else if(pickML>=150){conf+=14;signalCount++;}
-    else if(pickML>=100){conf+=10;signalCount++;}
-    else if(pickML>0){conf+=6;}
-
-    if(g.spread>=10&&spreadEdge>=2){conf+=12;}
-    else if(g.spread>=7&&spreadEdge>=1.5){conf+=8;}
-
+  var dogEdgeThresh=isNBA?1:0.5;
+  if(pickIsDog&&spreadEdge>=dogEdgeThresh){
+    var dogBonus=0;
     function recWPdog(rec){if(!rec)return 0.5;var p=rec.match(/(\d+)-(\d+)/);if(!p)return 0.5;return(+p[1])/(+p[1]+ +p[2])||0.5;}
     var dogWP=recWPdog(spreadSide==="away"?g.aRec:g.hRec);
     var favWPv=recWPdog(spreadSide==="away"?g.hRec:g.aRec);
-    if(dogWP>=0.55){conf+=18;signalCount++;}
-    else if(dogWP>=0.50){conf+=14;signalCount++;}
-    else if(dogWP>=0.45&&favWPv<=0.60){conf+=10;signalCount++;}
-    else if(dogWP>=0.40){conf+=6;}
-    else if(dogWP<0.35){conf-=8;}
+    var isDogHome=(spreadSide==='home'&&g.favAway);
 
-    var dogATS=spreadSide==="away"?aATS:hATS;
-    if(dogATS.pct>=0.60){conf+=14;signalCount++;}
-    else if(dogATS.pct>=0.55){conf+=8;signalCount++;}
-    else if(dogATS.pct<0.40){conf-=6;}
-
-    favInjPts=spreadSide==="away"?hInj:aInj;
-    if(favInjPts>=4){conf+=18;signalCount++;}
-    else if(favInjPts>=3){conf+=14;signalCount++;}
-    else if(favInjPts>=2){conf+=8;signalCount++;}
+    if(dogWP<0.25){
+      dogBonus-=20;
+    }else if(dogWP<0.38){
+      dogBonus-=10;
+    }else{
+      valuePlay=true;
+      if(isDogHome&&!isNBA){
+        if(dogWP>=0.55)dogBonus+=14;
+        else if(dogWP>=0.48)dogBonus+=10;
+        else if(dogWP>=0.42)dogBonus+=5;
+        signalCount++;
+      }
+      if(dogWP>=0.60){dogBonus+=10;signalCount++;}
+      else if(dogWP>=0.55){dogBonus+=8;signalCount++;}
+      else if(dogWP>=0.50){dogBonus+=5;}
+      else if(dogWP<0.40){dogBonus-=4;}
+      if(!isNBA&&g.spread>=3&&g.spread<=7&&dogWP>=0.45)dogBonus+=4;
+      var dogATS=spreadSide==="away"?aATS:hATS;
+      if(dogATS.pct>=0.58){dogBonus+=6;signalCount++;}
+      favInjPts=spreadSide==="away"?hInj:aInj;
+      if(favInjPts>=3){dogBonus+=8;signalCount++;}
+      else if(favInjPts>=2){dogBonus+=4;}
+    }
+    dogBonus=Math.min(dogBonus,30);
+    conf+=dogBonus;
   }else{
     if(spreadSide==="away"&&aATS.pct>=0.65){conf+=12;signalCount++;}
     else if(spreadSide==="away"&&aATS.pct>=0.55){conf+=6;}
@@ -712,8 +770,8 @@ function analyze(g){
     else{conf+=5;}
     if(pickIsDog&&pickEV>0.05)conf+=6;
   }
-  if(pickEV<-0.08){conf=Math.round(conf*0.70);}
-  if(pickEV<-0.18){conf=Math.round(conf*0.55);}
+  if(!valuePlay&&pickEV<-0.08){conf=Math.round(conf*0.70);}
+  if(!valuePlay&&pickEV<-0.18){conf=Math.round(conf*0.55);}
 
   var oppBestOut=false;
   if(spreadSide==="away"&&hLeaders.length>0){
@@ -770,13 +828,36 @@ function analyze(g){
   if(signalCount>=7)conf+=8;
   else if(signalCount>=5)conf+=4;
 
+  var sit=g._sit||{};
+  if(sit.momentumAdv){
+    var mAbs=Math.abs(sit.momentumAdv);
+    var mFavorsHome=sit.momentumAdv>0;
+    var mAligned=(mFavorsHome&&spreadSide==='home')||(!mFavorsHome&&spreadSide==='away');
+    if(mAligned&&mAbs>=2){conf+=10;signalCount++;}
+    else if(mAligned&&mAbs>=1){conf+=5;}
+    else if(!mAligned&&mAbs>=2){conf-=6;}
+  }
+  if(sit.confTournament&&!isNBA){
+    if(spreadEdge>=1)conf+=4;
+    if(pickIsDog&&spreadEdge>=0.5)conf+=6;
+  }
+  if(!isNBA&&sit.homeCourtBoost>=1.5&&spreadSide==='home'){conf+=6;signalCount++;}
+
   if(!isNBA){
-    var cbbMult=0.88;
-    if(g.pubEstimated&&(contrarianFlip||isContrarian||fadePlay))cbbMult=0.82;
+    var cbbMult=0.93;
+    if(pickIsDog&&valuePlay)cbbMult=1.0;
+    else if(pickIsDog)cbbMult=0.97;
+    if(g.pubEstimated&&(contrarianFlip||isContrarian||fadePlay)&&!pickIsDog)cbbMult=Math.min(cbbMult,0.88);
     conf=Math.round(conf*cbbMult);
   }else if(g.pubEstimated&&(contrarianFlip||isContrarian||fadePlay)){
     conf=Math.round(conf*0.92);
   }
+
+  function qWP(rec){if(!rec)return 0.5;var p=rec.match(/(\d+)-(\d+)/);if(!p)return 0.5;return(+p[1])/(+p[1]+ +p[2])||0.5;}
+  var pickTeamWP=qWP(spreadSide==="away"?g.aRec:g.hRec);
+  var oppTeamWP=qWP(spreadSide==="away"?g.hRec:g.aRec);
+  if(spreadSide!=="none"&&pickTeamWP<0.45&&oppTeamWP<0.45){conf=Math.round(conf*0.60);}
+  else if(spreadSide!=="none"&&pickTeamWP<0.42){conf=Math.round(conf*0.82);}
 
   conf=Math.min(conf,95);
   var bet;
@@ -799,34 +880,35 @@ function analyze(g){
 
   if(bestMLEdge>1.5){
     var mlPayout=bestML==="away"?g.awayML:g.homeML;
-    var mlNorm=Math.abs(bestMLEdge)/2.5;
-    if(mlPayout>0)mlNorm*=1.8;
-    if(mlEV>0.05)mlNorm*=1.4;
-    if(bestMLEdge>=5)mlNorm*=1.3;
-    picks.push({type:mlPayout>0?"VALUE ML":"ML",label:mlPlay,edge:bestMLEdge,norm:mlNorm,unit:"%"});
+    if(mlPayout>=-200){
+      var mlNorm=Math.abs(bestMLEdge)/2.5;
+      if(mlPayout>0)mlNorm*=1.8;
+      if(mlEV>0.05)mlNorm*=1.4;
+      if(bestMLEdge>=5)mlNorm*=1.3;
+      picks.push({type:mlPayout>0?"VALUE ML":"ML",label:mlPlay,edge:bestMLEdge,norm:mlNorm,unit:"%"});
+    }
   }
 
-  if(pickIsDog&&valuePlay&&spreadEdge>=1){
+  if(pickIsDog&&valuePlay&&spreadEdge>=dogEdgeThresh){
     var valTeam=spreadSide==="away"?g.away:g.home;
     var valML=spreadSide==="away"?g.awayML:g.homeML;
     var valLabel=valTeam+" ML ("+(valML>0?"+":"")+valML+")";
     var valNorm=spreadEdge*1.8+(valML>0?valML/80:0);
     if(mlEV>0)valNorm*=1.3;
+    if(!isNBA)valNorm*=1.4;
+    var isDogHome=(spreadSide==='home'&&g.favAway);
+    if(!isNBA&&isDogHome)valNorm*=1.3;
     picks.push({type:"VALUE",label:valLabel,edge:spreadEdge,norm:valNorm,unit:" pts"});
   }
 
-  if(fadePlay&&spreadSide!=="none"){
-    var fadeTeam=spreadSide==="away"?g.away:g.home;
-    var fadeLabel="\u26A0 FADE public \u2192 "+fadeTeam+(g.spread===0?" PK":pickIsDog?" +"+g.spread:" -"+g.spread);
-    picks.push({type:"FADE",label:fadeLabel,edge:spreadEdge,norm:spreadEdge*1.6+(oppPub-60)/10,unit:" pts"});
-  }
-
   var totalConf=0;
-  if(totalEdge>=5)totalConf=88;
-  else if(totalEdge>=4)totalConf=82;
-  else if(totalEdge>=3)totalConf=72;
-  else if(totalEdge>=2)totalConf=58;
-  else if(totalEdge>=1)totalConf=42;
+  var minTotalEdge=isNBA?1.5:2.0;
+  if(totalEdge<minTotalEdge){totalSide="none";totalEdge=0;}
+  if(totalEdge>=6)totalConf=85;
+  else if(totalEdge>=5)totalConf=76;
+  else if(totalEdge>=4)totalConf=66;
+  else if(totalEdge>=3)totalConf=55;
+  else if(totalEdge>=2)totalConf=42;
   else totalConf=20;
   if(rlm)totalConf+=5;
   if(steam)totalConf+=5;
@@ -836,12 +918,20 @@ function analyze(g){
   if(g.awayT&&g.homeT){
     var avgPace=(g.awayT+g.homeT)/2;
     var basePace=isNBA?100:68;
-    if(totalSide==='over'&&avgPace>basePace*1.03)totalConf+=3;
-    if(totalSide==='under'&&avgPace<basePace*0.97)totalConf+=3;
+    var paceDiff=Math.abs(g.awayT-g.homeT);
+    if(totalSide==='over'&&avgPace>basePace*1.05)totalConf+=3;
+    if(totalSide==='under'&&avgPace<basePace*0.95)totalConf+=3;
+    if(totalSide==='over'&&avgPace>basePace*1.08)totalConf+=3;
+    if(totalSide==='under'&&avgPace<basePace*0.92)totalConf+=3;
+    if(totalSide==='over'&&g.awayT>basePace*1.04&&g.homeT>basePace*1.04)totalConf+=4;
+    if(totalSide==='under'&&g.awayT<basePace*0.96&&g.homeT<basePace*0.96)totalConf+=4;
   }
-  if(!isNBA)totalConf=Math.round(totalConf*0.90);
+  if(aInj>=3||hInj>=3){
+    if(totalSide==='under')totalConf+=4;
+  }
+  if(!isNBA)totalConf=Math.round(totalConf*0.88);
   totalConf=Math.min(totalConf,95);
-  if(totalSide!=="none") picks.push({type:"TOTAL",label:totalPlay,edge:totalEdge,norm:totalEdge,unit:" pts",conf:totalConf});
+  if(totalSide!=="none"&&totalConf>=35) picks.push({type:"TOTAL",label:totalPlay,edge:totalEdge,norm:totalEdge,unit:" pts",conf:totalConf});
 
   picks.forEach(function(p){if(!p.conf)p.conf=conf;});
   picks.sort(function(a,b){
@@ -859,7 +949,8 @@ function analyze(g){
   return Object.assign({},g,{adjSpread:adjSpread,adjTotal:adjTotal,spreadEdge:spreadEdge,spreadSide:spreadSide,spreadPlay:spreadPlay,
     totalEdge:totalEdge,totalSide:totalSide,totalPlay:totalPlay,rlm:rlm,steam:steam,aInj:aInj,hInj:hInj,
     aMLEdge:aMLEdge,hMLEdge:hMLEdge,bestMLEdge:bestMLEdge,mlPlay:mlPlay,conf:conf,bet:bet,aATS:aATS,hATS:hATS,topPick:topPick,picks:picks,lineMv:lineMv,signalCount:signalCount,
-    pickIsDog:pickIsDog,valuePlay:valuePlay,pickML:pickML,pickEV:pickEV,mlEV:mlEV,isContrarian:isContrarian,sharpPlay:sharpPlay,fadePlay:fadePlay,trapGame:trapGame,pickPub:pickPub,clv:clv,gotCLV:gotCLV,contrarianFlip:contrarianFlip,oppBestOut:oppBestOut});
+    pickIsDog:pickIsDog,valuePlay:valuePlay,pickML:pickML,pickEV:pickEV,mlEV:mlEV,isContrarian:isContrarian,sharpPlay:sharpPlay,fadePlay:fadePlay,trapGame:trapGame,pickPub:pickPub,clv:clv,gotCLV:gotCLV,contrarianFlip:contrarianFlip,oppBestOut:oppBestOut,
+    sitMomentum:sit.momentumAdv||0,sitConfTournament:sit.confTournament||false,isDogHome:pickIsDog&&spreadSide==='home'&&g.favAway});
 }
 
 function betCell(g){
@@ -878,7 +969,8 @@ function signals(g){
   if(g.fadePlay)parts.push('<span class="badge" style="background:#ff520022;color:#ff5252;border:1px solid #ff525255;font-weight:800">FADE '+g.pickPub+'%pub</span>');
   if(g.trapGame)parts.push('<span class="badge" style="background:#ff170022;color:#ff1744;border:1px solid #ff174455;font-weight:800">\u26A0 TRAP</span>');
   if(g.valuePlay)parts.push('<span class="badge" style="background:#ffd60022;color:#ffd600;border:1px solid #ffd60055;font-weight:800">VALUE '+(g.pickML>0?'+'+g.pickML:'')+'</span>');
-  if(g.pickIsDog&&!g.valuePlay)parts.push('<span class="badge" style="background:#ff980022;color:#ff9800;border:1px solid #ff980044">DOG</span>');
+  if(g.isDogHome)parts.push('<span class="badge" style="background:#ff6d0022;color:#ff6d00;border:1px solid #ff6d0055;font-weight:800">\uD83C\uDFE0 HOME DOG</span>');
+  if(g.pickIsDog&&!g.valuePlay&&!g.isDogHome)parts.push('<span class="badge" style="background:#ff980022;color:#ff9800;border:1px solid #ff980044">DOG</span>');
   if(g.pickEV>0)parts.push('<span class="badge" style="background:#00e67622;color:#00e676;border:1px solid #00e67644;font-weight:700">+EV '+(g.pickEV>0?'+':'')+g.pickEV.toFixed(2)+'</span>');
   if(g.spreadEdge>=1)parts.push('<span class="badge badge-val">EDGE '+g.spreadEdge+'pt</span>');
   if(g.oppBestOut)parts.push('<span class="badge" style="background:#ff170022;color:#ff1744;border:1px solid #ff174455;font-weight:800">\u2B50 STAR OUT</span>');
@@ -888,6 +980,11 @@ function signals(g){
   if(g.aInj>=2||g.hInj>=2)parts.push('<span class="badge badge-inj">INJ '+(g.aInj>g.hInj?g.aInj:g.hInj)+'pt</span>');
   if((g.bookSpreadEdge||0)>=1.5)parts.push('<span class="badge badge-val">BOOK '+g.bookSpreadEdge+'</span>');
   if(g.gotCLV&&g.clv>=0.5)parts.push('<span class="badge" style="background:#00bcd422;color:#00bcd4;border:1px solid #00bcd444;font-weight:700">CLV +'+g.clv.toFixed(1)+'</span>');
+  if(g.sitMomentum&&Math.abs(g.sitMomentum)>=1.5){
+    var mLabel=g.sitMomentum>0?'HOME HOT':'AWAY HOT';
+    parts.push('<span class="badge" style="background:#76ff0322;color:#76ff03;border:1px solid #76ff0344;font-weight:700">'+mLabel+'</span>');
+  }
+  if(g.sitConfTournament)parts.push('<span class="badge" style="background:#aa00ff22;color:#aa00ff;border:1px solid #aa00ff44;font-weight:700">CONF SZN</span>');
   var sc=g.signalCount||0;
   if(sc>=3)b+='<span style="color:'+(sc>=5?'#00e676':sc>=4?'#ffeb3b':'#64b5f6')+';font-size:.6em;font-weight:700;display:block;margin-bottom:2px">'+sc+' SIGNALS</span>';
   b+=parts.join(' ')||'<span style="color:#455a64">\u2014</span>';
@@ -1302,7 +1399,7 @@ async function fetchESPNGames(){
   var dateParam=TODAY.getFullYear()+pad(TODAY.getMonth()+1)+pad(TODAY.getDate());
   var allGames=[];
   var endpoints=[
-    {url:'https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam,league:'CBB',defTotal:140},
+    {url:'https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam+'&limit=300&groups=50',league:'CBB',defTotal:140},
     {url:'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates='+dateParam,league:'NBA',defTotal:220}
   ];
   function parseEndpoint(ep,data){
@@ -1386,7 +1483,7 @@ function getSummaryUrl(g){
 }
 
 async function fetchAllSummaries(games){
-  var BATCH=20;
+  var BATCH=40;
   var timeout=3000;
   function fetchT(url){
     return Promise.race([
@@ -1506,7 +1603,7 @@ async function fetchLiveProps(games){
 
   var nbaGames=games.filter(function(g){return g.league==='NBA'&&g.espnEventId});
   var cbbGames=games.filter(function(g){return g.league==='CBB'&&g.espnEventId});
-  var topCBB=cbbGames.slice(0,12);
+  var topCBB=cbbGames;
 
   function propConf(propName,edge,oppInj){
     var conf=52;
@@ -1695,7 +1792,7 @@ async function fetchLiveProps(games){
 
   allProps.sort(function(a,b){return b.conf-a.conf||b.edge-a.edge});
   allProps=filterInjuredProps(allProps,games);
-  return allProps.slice(0,40);
+  return allProps.slice(0,100);
 }
 
 var PROPS_CACHE_KEY='propsCache_';
@@ -2132,7 +2229,7 @@ function buildPropsFromRealLines(realLines,espnAvgs,games){
     if(!a.injBoost&&b.injBoost)return 1;
     return b.conf-a.conf||b.edge-a.edge;
   });
-  return props.slice(0,50);
+  return props.slice(0,100);
 }
 
 var GAMELOG_CACHE={};
@@ -2254,10 +2351,11 @@ function parseGameLog(data){
 
 async function fetchESPNPlayerAvgs(games){
   var avgs={};
-  var nbaGames=games.filter(function(g){return g.league==='NBA'&&g.espnEventId});
-  nbaGames.forEach(function(g){
+  var allGamesWithIds=games.filter(function(g){return g.espnEventId});
+  allGamesWithIds.forEach(function(g){
     var d=SUMMARY_CACHE[g.espnEventId];
     if(!d||!d.leaders)return;
+    var sportPath=g.league==='NBA'?'basketball/nba':'basketball/mens-college-basketball';
     d.leaders.forEach(function(teamBlock){
       var teamName=(teamBlock.team&&teamBlock.team.displayName)||'';
       if(!teamBlock.leaders)return;
@@ -2269,7 +2367,7 @@ async function fetchESPNPlayerAvgs(games){
           var name=leader.athlete.displayName||'';
           if(!name)return;
           var athId=leader.athlete.id||leader.athlete.uid;
-          if(athId){ATHLETE_IDS[name.toLowerCase()]={id:athId,sport:'basketball/nba',league:'NBA'};}
+          if(athId){ATHLETE_IDS[name.toLowerCase()]={id:athId,sport:sportPath,league:g.league};}
           var val=parseFloat(leader.displayValue)||0;
           var key=name.toLowerCase();
           if(!avgs[key])avgs[key]={pts:0,reb:0,ast:0,threes:0,team:teamName};
@@ -2287,7 +2385,7 @@ async function fetchESPNExtras(games){
   var pad=function(n){return n<10?'0'+n:''+n};
   var dateParam=TODAY.getFullYear()+pad(TODAY.getMonth()+1)+pad(TODAY.getDate());
   try{
-    let res=await fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam);
+    let res=await fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam+'&limit=300&groups=50');
     let data=await res.json();
     if(!data.events)return;
     data.events.forEach(function(ev){
@@ -2313,7 +2411,7 @@ async function fetchInjuries(games){
   var pad=function(n){return n<10?'0'+n:''+n};
   var dateParam=TODAY.getFullYear()+pad(TODAY.getMonth()+1)+pad(TODAY.getDate());
   try{
-    let res=await fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam);
+    let res=await fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam+'&limit=300&groups=50');
     let data=await res.json();
     if(!data.events)return;
     for(let i=0;i<data.events.length;i++){
@@ -2694,7 +2792,7 @@ async function fetchFinalScores(dateObj){
     }
   }catch(e){console.log('NBA scores fetch failed:',e);}
   try{
-    var cbbData=await fetchT('https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam);
+    var cbbData=await fetchT('https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates='+dateParam+'&limit=300&groups=50');
     if(cbbData.events){
       cbbData.events.forEach(function(ev){
         var comp=ev.competitions[0];
@@ -2975,4 +3073,3 @@ loadData(false);
 </script>
 </body>
 </html>
-
