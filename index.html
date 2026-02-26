@@ -548,7 +548,8 @@ function analyze(g){
     var rawSpread=aPts-hPts-HCA;
     var rawTotal=aPts+hPts;
     var lineSpreadRef=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
-    adjSpread=Math.round((lineSpreadRef+((rawSpread-lineSpreadRef)*0.50))*10)/10;
+    var effBlend=Math.abs(rawSpread)<Math.abs(lineSpreadRef)?0.58:0.50;
+    adjSpread=Math.round((lineSpreadRef+((rawSpread-lineSpreadRef)*effBlend))*10)/10;
     adjTotal=Math.round((g.total+((rawTotal-g.total)*0.50))*10)/10;
   }else{
     function recParse(rec){if(!rec)return{wp:0.5,gp:0};var p=rec.match(/(\d+)-(\d+)/);if(!p)return{wp:0.5,gp:0};var w=+p[1],l=+p[2],gp=w+l;return{wp:gp>0?w/gp:0.5,gp:gp};}
@@ -562,6 +563,7 @@ function analyze(g){
     var rawRecSpread=aPow-hPow-HCA;
     var lineSpreadRef=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
     var blendW=isNBA?0.35:0.50;
+    if(Math.abs(rawRecSpread)<Math.abs(lineSpreadRef))blendW=isNBA?0.42:0.58;
     adjSpread=Math.round((lineSpreadRef+(rawRecSpread-lineSpreadRef)*blendW)*10)/10;
     adjTotal=g.total;
   }
