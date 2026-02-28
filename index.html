@@ -95,6 +95,7 @@ footer{text-align:center;color:#455a64;font-size:.65em;margin-top:16px;padding:1
 <div class="tab" onclick="showTab('bets',this)">Best Bets Only</div>
 <div class="tab" onclick="showTab('totals',this)">Totals</div>
 <div class="tab" onclick="showTab('props',this)">Player Props</div>
+<div class="tab" onclick="showTab('parlay',this)" style="color:#ffd600;border-color:#ffd60044">🐕 Underdog Parlay</div>
 <div class="tab tab-lock" onclick="showTab('results',this)">Results</div>
 <div class="tab tab-lock" onclick="showTab('auto',this)">Auto-Update Setup</div>
 <div class="tab" onclick="showTab('method',this)">How It Works</div>
@@ -104,6 +105,7 @@ footer{text-align:center;color:#455a64;font-size:.65em;margin-top:16px;padding:1
 <div id="bets" class="sec"></div>
 <div id="totals" class="sec"></div>
 <div id="props" class="sec"></div>
+<div id="parlay" class="sec"></div>
 <div id="results" class="sec pin-gate"></div>
 <div id="auto" class="sec pin-gate"></div>
 <div id="method" class="sec"></div>
@@ -1135,7 +1137,7 @@ function filterLeague(league,el){
   LEAGUE_FILTER=league;
   document.querySelectorAll('#leagueFilter .tab').forEach(function(t){t.classList.remove('active')});
   el.classList.add('active');
-  renderAll();renderBets();renderTotals();renderProps();
+  renderAll();renderBets();renderTotals();renderProps();renderParlay();
 }
 
 function filteredList(list){
@@ -1304,6 +1306,154 @@ function renderProps(){
   });
   h+='</tbody></table></div>';
   document.getElementById('props').innerHTML=h;
+}
+
+function renderParlay(){
+  var dogs=filteredList(ALL).filter(function(g){
+    return g.pickIsDog&&g.bet!=='NO'&&g.pickML>100;
+  });
+  dogs.sort(function(a,b){
+    var aScore=parlayScore(a),bScore=parlayScore(b);
+    return bScore-aScore;
+  });
+  function parlayScore(g){
+    var s=0;
+    var c=g.topPick?g.topPick.conf:g.conf;
+    s+=c*2;
+    if(g.valuePlay)s+=25;
+    if(g.isDogHome)s+=20;
+    if(g.sharpPlay)s+=20;
+    if(g.rlm)s+=15;
+    if(g.modelTier==='fourFactors')s+=15;
+    if(g.pickEV>0)s+=g.pickEV*40;
+    if(g.spreadEdge>=2)s+=g.spreadEdge*5;
+    if(g.signalCount>=3)s+=g.signalCount*4;
+    if(g.steam)s+=10;
+    if(g.fadePlay)s+=10;
+    if(g.oppBestOut)s+=15;
+    var wp=recWP(g.pickIsDog&&g.spreadSide==='away'?g.aRec:g.hRec);
+    if(wp>=0.55)s+=20;
+    else if(wp>=0.48)s+=10;
+    else if(wp<0.35)s-=30;
+    if(g.pickML>500)s-=15;
+    if(g.pickML>350)s-=8;
+    return s;
+  }
+  function recWP(rec){if(!rec)return 0.5;var p=rec.match(/(\d+)-(\d+)/);if(!p)return 0.5;return(+p[1])/(+p[1]+ +p[2])||0.5;}
+  function mlToDecimal(ml){return ml>0?1+(ml/100):1+(100/Math.abs(ml));}
+  function decToAmerican(d){if(d>=2)return '+'+(Math.round((d-1)*100));return '-'+Math.round(100/(d-1));}
+  var picks=dogs.slice(0,4);
+  var parlayDecimal=1;
+  picks.forEach(function(g){parlayDecimal*=mlToDecimal(g.pickML);});
+  var parlayAmerican=picks.length>0?decToAmerican(parlayDecimal):'--';
+  var payout100=picks.length>0?Math.round(parlayDecimal*100):'--';
+  var payout10=picks.length>0?Math.round(parlayDecimal*10):'--';
+  var impliedProb=picks.length>0?(1/parlayDecimal*100).toFixed(1):'--';
+
+  var h='<div style="margin-bottom:16px">';
+  h+='<h3 style="color:#ffd600;margin:0 0 4px;font-size:1.15em">\uD83D\uDC15 UNDERDOG PARLAY BUILDER</h3>';
+  h+='<p style="color:#78909c;font-size:.75em;margin-bottom:14px">Auto-selects the model\'s highest-conviction underdogs to win outright on the moneyline. These are dogs with real statistical edges \u2014 value plays, sharp action, Four Factors convergence, or matchup advantages the market is underpricing.</p>';
+  h+='</div>';
+
+  if(picks.length===0){
+    h+='<div style="background:#141828;border:1px solid #2a3040;border-radius:8px;padding:30px;text-align:center">';
+    h+='<p style="color:#78909c;font-size:.9em">No qualifying underdogs found today. Dogs need to be a LEAN or better with ML odds above +100.</p>';
+    h+='</div>';
+    document.getElementById('parlay').innerHTML=h;
+    return;
+  }
+
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px">';
+  h+='<div class="scard" style="border-color:#ffd60044"><h4>PARLAY LEGS</h4><div class="v" style="color:#ffd600">'+picks.length+'</div></div>';
+  h+='<div class="scard" style="border-color:#ffd60044"><h4>COMBINED ODDS</h4><div class="v" style="color:#ffd600">'+parlayAmerican+'</div></div>';
+  h+='<div class="scard" style="border-color:#00e67644"><h4>$10 PAYS</h4><div class="v" style="color:#00e676">$'+payout10+'</div></div>';
+  h+='<div class="scard" style="border-color:#00e67644"><h4>$100 PAYS</h4><div class="v" style="color:#00e676">$'+payout100+'</div></div>';
+  h+='<div class="scard" style="border-color:#ff525244"><h4>IMPLIED PROB</h4><div class="v" style="color:#ff5252;font-size:1.2em">'+impliedProb+'%</div></div>';
+  h+='</div>';
+
+  h+='<div style="background:linear-gradient(135deg,#1a1f2e,#141828);border:2px solid #ffd60033;border-radius:10px;padding:18px;margin-bottom:16px">';
+  h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">';
+  h+='<span style="font-size:1.8em">\uD83C\uDFB0</span>';
+  h+='<div><span style="color:#ffd600;font-weight:800;font-size:1.1em">TODAY\'S DOG PARLAY</span>';
+  h+='<span style="display:block;color:#78909c;font-size:.7em">'+picks.length+'-leg ML parlay \u2022 '+parlayAmerican+' combined</span></div>';
+  h+='</div>';
+
+  picks.forEach(function(g,i){
+    var teamName=g.spreadSide==='away'?g.away:g.home;
+    var oppName=g.spreadSide==='away'?g.home:g.away;
+    var wp=recWP(g.spreadSide==='away'?g.aRec:g.hRec);
+    var c=g.topPick?g.topPick.conf:g.conf;
+    var barW=Math.min(c,95);
+    var reasons=[];
+    if(g.valuePlay)reasons.push('\uD83D\uDCB0 VALUE');
+    if(g.isDogHome)reasons.push('\uD83C\uDFE0 HOME DOG');
+    if(g.sharpPlay)reasons.push('\u2605 SHARP');
+    if(g.rlm)reasons.push('RLM');
+    if(g.steam)reasons.push('STEAM');
+    if(g.modelTier==='fourFactors')reasons.push('\uD83D\uDCC8 4-FACTOR');
+    if(g.pickEV>0)reasons.push('+EV');
+    if(g.oppBestOut)reasons.push('\u2B50 STAR OUT');
+    if(g.spreadEdge>=2)reasons.push('EDGE '+g.spreadEdge+'pt');
+    if(g.fadePlay)reasons.push('FADE PUBLIC');
+    if(reasons.length===0)reasons.push('MODEL EDGE');
+    var legClr=i===0?'#ffd600':i===1?'#ffab00':i===2?'#ff6d00':'#ff3d00';
+
+    h+='<div style="background:#0a0e1788;border:1px solid '+legClr+'44;border-radius:8px;padding:14px;margin-bottom:10px;position:relative;overflow:hidden">';
+    h+='<div style="position:absolute;top:0;left:0;width:'+barW+'%;height:3px;background:'+legClr+';border-radius:2px"></div>';
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">';
+    h+='<div style="flex:1;min-width:200px">';
+    h+='<span style="color:'+legClr+';font-weight:800;font-size:.7em;letter-spacing:1px">LEG '+(i+1)+'</span>';
+    h+='<div style="font-weight:800;font-size:1.1em;color:#e0e0e0;margin:2px 0">'+teamName+' ML <span style="color:#ffd600">'+((g.pickML>0?'+':'')+g.pickML)+'</span></div>';
+    h+='<div style="color:#78909c;font-size:.75em">vs '+oppName+' \u2022 '+(g.time||'')+' \u2022 '+leagueBadge(g)+'</div>';
+    h+='<div style="color:#546e7a;font-size:.68em;margin-top:2px">Rec: '+(g.spreadSide==='away'?g.aRec:g.hRec)+' ('+Math.round(wp*100)+'% WP) \u2022 Spread: '+(g.favHome&&g.spreadSide==='away'?'+':g.favAway&&g.spreadSide==='home'?'+':'')+g.spread+'</div>';
+    h+='</div>';
+    h+='<div style="text-align:right;min-width:120px">';
+    h+='<div style="color:'+(c>=70?'#00e676':c>=50?'#ffeb3b':'#ff5252')+';font-weight:800;font-size:1.3em">'+c+'%</div>';
+    h+='<div style="color:#78909c;font-size:.62em">CONFIDENCE</div>';
+    h+='<div style="margin-top:4px">'+reasons.map(function(r){return '<span class="badge" style="background:'+legClr+'18;color:'+legClr+';border:1px solid '+legClr+'33;font-size:.6em">'+r+'</span>';}).join(' ')+'</div>';
+    h+='</div>';
+    h+='</div>';
+    h+='</div>';
+  });
+
+  h+='<div style="text-align:center;padding:10px;border-top:1px solid #ffd60022;margin-top:4px">';
+  h+='<span style="color:#ffd600;font-weight:800;font-size:1em">PARLAY ODDS: '+parlayAmerican+'</span>';
+  h+='<span style="display:block;color:#78909c;font-size:.7em;margin-top:2px">$10 \u2192 $'+payout10+' \u2022 $25 \u2192 $'+Math.round(parlayDecimal*25)+' \u2022 $50 \u2192 $'+Math.round(parlayDecimal*50)+' \u2022 $100 \u2192 $'+payout100+'</span>';
+  h+='</div>';
+  h+='</div>';
+
+  if(dogs.length>picks.length){
+    h+='<div style="margin-top:14px">';
+    h+='<h4 style="color:#78909c;font-size:.85em;margin-bottom:8px">OTHER DOGS ON THE BOARD ('+dogs.length+' total)</h4>';
+    h+='<div class="scroll-wrap"><table><thead><tr><th>Rank</th><th>BET?</th><th>Matchup</th><th>Dog Pick</th><th>ML Odds</th><th>Conf</th><th>Edge</th><th>Signals</th><th>Why</th></tr></thead><tbody>';
+    dogs.forEach(function(g,i){
+      var teamName=g.spreadSide==='away'?g.away:g.home;
+      var c=g.topPick?g.topPick.conf:g.conf;
+      var inParlay=i<picks.length;
+      var rowStyle=inParlay?'background:#ffd60008;border-left:3px solid #ffd600':'';
+      h+='<tr style="'+rowStyle+'">';
+      h+='<td style="color:'+(inParlay?'#ffd600':'#546e7a')+';font-weight:800">'+(inParlay?'\u2B50 ':'')+'#'+(i+1)+'</td>';
+      h+='<td>'+betCell(g)+'</td>';
+      h+='<td>'+leagueBadge(g)+'<strong>'+g.away+' @ '+g.home+'</strong></td>';
+      h+='<td style="font-weight:800;color:#ffd600">'+teamName+' ML</td>';
+      h+='<td style="font-weight:700;color:#00e676">'+(g.pickML>0?'+':'')+g.pickML+'</td>';
+      h+='<td style="color:'+(c>=70?'#00e676':c>=50?'#ffeb3b':'#ff5252')+'">'+c+'%</td>';
+      h+='<td class="'+edgeCls(g.spreadEdge)+'">'+g.spreadEdge+'pt</td>';
+      h+='<td>'+signals(g)+'</td>';
+      h+='<td style="font-size:.7em;color:#90a4ae;max-width:180px">'+(g.topPick?g.topPick.label:'--')+'</td>';
+      h+='</tr>';
+    });
+    h+='</tbody></table></div>';
+    h+='</div>';
+  }
+
+  h+='<div style="background:#141828;border:1px solid #2a3040;border-radius:6px;padding:12px;margin-top:14px;font-size:.7em;color:#546e7a;line-height:1.6">';
+  h+='<strong style="color:#78909c">HOW DOGS ARE RANKED:</strong> ';
+  h+='Model confidence \u00d7 2 + value play bonus (+25) + home dog (+20) + sharp action (+20) + RLM (+15) + Four Factors (+15) + +EV bonus + edge points + signal count bonus. ';
+  h+='Bad records (&lt;35% WP) and extreme longshots (+500) are penalized. The top '+Math.min(4,picks.length)+' are auto-parlayed.';
+  h+='</div>';
+
+  document.getElementById('parlay').innerHTML=h;
 }
 
 function renderAuto(){
@@ -2891,13 +3041,13 @@ async function loadData(isAutoRefresh){
   document.getElementById('liveStatus').className='live';
   document.getElementById('dataSource').textContent='Source: '+source;
   snapshotPicks();
-  renderAll();renderBets();renderTotals();
+  renderAll();renderBets();renderTotals();renderParlay();
 
   function reAnalyze(){
     ALL=GAMES.map(analyze).sort(function(a,b){return b.conf-a.conf});
     BETS=ALL.filter(function(g){return g.bet==="YES"});
     snapshotPicks();
-    renderAll();renderBets();renderTotals();
+    renderAll();renderBets();renderTotals();renderParlay();
   }
 
   var gamesWithIds=GAMES.filter(function(g){return g.espnEventId});
