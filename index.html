@@ -1310,7 +1310,7 @@ function renderProps(){
 
 function renderParlay(){
   var dogs=filteredList(ALL).filter(function(g){
-    return g.pickIsDog&&g.bet!=='NO'&&g.pickML>100;
+    return g.league==='CBB'&&g.pickIsDog&&g.bet!=='NO'&&g.pickML>100;
   });
   dogs.sort(function(a,b){
     var aScore=parlayScore(a),bScore=parlayScore(b);
