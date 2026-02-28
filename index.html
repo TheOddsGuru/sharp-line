@@ -1310,7 +1310,13 @@ function renderProps(){
 
 function renderParlay(){
   var dogs=filteredList(ALL).filter(function(g){
-    return g.league==='CBB'&&g.pickIsDog&&g.bet!=='NO'&&g.pickML>100;
+    if(g.league!=='CBB'||!g.pickIsDog||g.bet==='NO'||g.pickML<=100)return false;
+    var dogTeam=(g.spreadSide==='away'?g.away:g.home).toLowerCase();
+    var oppTeam=(g.spreadSide==='away'?g.home:g.away).toLowerCase();
+    if(dogTeam.includes('clemson'))return false;
+    if(dogTeam.includes('st. mary')||dogTeam.includes('st mary'))return false;
+    if(oppTeam.includes('gonzaga'))return false;
+    return true;
   });
   dogs.sort(function(a,b){
     var aScore=parlayScore(a),bScore=parlayScore(b);
