@@ -539,19 +539,58 @@ function analyze(g){
   var isNBA=g.league==="NBA";
   var HCA=isNBA?2.5:3.5;
   var injMult=isNBA?1.2:1.0;
+  var hasStats=g.teamStats&&g.teamStats.away&&g.teamStats.home;
   var hasEff=g.awayOE&&g.homeOE&&g.awayDE&&g.homeDE&&g.awayT&&g.homeT;
   var adjSpread,adjTotal;
-  if(hasEff){
+  var modelTier='record';
+  var ffResult=null;
+  var matchupResult=null;
+
+  if(hasStats){
+    modelTier='fourFactors';
+    var aOff=g.teamStats.away;
+    var hOff=g.teamStats.home;
+    var aDefProxy={eFG:hOff.eFG,toPct:aOff.toPct,orbPct:hOff.orbPct,ftRate:hOff.ftRate,pace:aOff.pace||0,
+      fg3Pct:hOff.fg3Pct,spg:aOff.spg,drb:aOff.drb};
+    var hDefProxy={eFG:aOff.eFG,toPct:hOff.toPct,orbPct:aOff.orbPct,ftRate:aOff.ftRate,pace:hOff.pace||0,
+      fg3Pct:aOff.fg3Pct,spg:hOff.spg,drb:hOff.drb};
+    if(aOff.oppPpg>0){
+      var leagAvgPPG=isNBA?112:72;
+      var aDefStrength=aOff.oppPpg/leagAvgPPG;
+      aDefProxy.eFG=aDefProxy.eFG*aDefStrength;
+    }
+    if(hOff.oppPpg>0){
+      var leagAvgPPG2=isNBA?112:72;
+      var hDefStrength=hOff.oppPpg/leagAvgPPG2;
+      hDefProxy.eFG=hDefProxy.eFG*hDefStrength;
+    }
+    ffResult=computeFourFactorsEdge(aOff,aDefProxy,hOff,hDefProxy,isNBA);
+    matchupResult={
+      away:matchupVulnerability(aOff,hOff),
+      home:matchupVulnerability(hOff,aOff)
+    };
+    var matchupAdj=(matchupResult.away.totalEdge-matchupResult.home.totalEdge)*
+      (isNBA?8:10);
+    var rawSpread=ffResult.rawSpread-HCA+matchupAdj;
+    var rawTotal=ffResult.rawTotal;
+    var lineSpreadRef=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
+    var statBlend=0.45;
+    if(Math.abs(rawSpread-lineSpreadRef)>6)statBlend=0.35;
+    adjSpread=Math.round((lineSpreadRef+(rawSpread-lineSpreadRef)*statBlend)*10)/10;
+    adjTotal=Math.round((g.total+(rawTotal-g.total)*0.40)*10)/10;
+  }else if(hasEff){
+    modelTier='efficiency';
     var tempo=(g.awayT+g.homeT)/2;
     var aPts=(g.awayOE/100)*(g.homeDE/100)*tempo;
     var hPts=(g.homeOE/100)*(g.awayDE/100)*tempo;
-    var rawSpread=aPts-hPts-HCA;
-    var rawTotal=aPts+hPts;
-    var lineSpreadRef=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
-    var effBlend=Math.abs(rawSpread)<Math.abs(lineSpreadRef)?0.65:0.50;
-    adjSpread=Math.round((lineSpreadRef+((rawSpread-lineSpreadRef)*effBlend))*10)/10;
-    adjTotal=Math.round((g.total+((rawTotal-g.total)*0.50))*10)/10;
+    var rawSpread2=aPts-hPts-HCA;
+    var rawTotal2=aPts+hPts;
+    var lineSpreadRef2=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
+    var effBlend=Math.abs(rawSpread2)<Math.abs(lineSpreadRef2)?0.55:0.42;
+    adjSpread=Math.round((lineSpreadRef2+((rawSpread2-lineSpreadRef2)*effBlend))*10)/10;
+    adjTotal=Math.round((g.total+((rawTotal2-g.total)*0.45))*10)/10;
   }else{
+    modelTier='record';
     function recParse(rec){if(!rec)return{wp:0.5,gp:0};var p=rec.match(/(\d+)-(\d+)/);if(!p)return{wp:0.5,gp:0};var w=+p[1],l=+p[2],gp=w+l;return{wp:gp>0?w/gp:0.5,gp:gp};}
     var aR=recParse(g.aRec),hR=recParse(g.hRec);
     var prior=8;
@@ -561,10 +600,10 @@ function analyze(g){
     var aPow=(aRegWP-0.5)*K;
     var hPow=(hRegWP-0.5)*K;
     var rawRecSpread=aPow-hPow-HCA;
-    var lineSpreadRef=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
-    var blendW=isNBA?0.35:0.50;
-    if(Math.abs(rawRecSpread)<Math.abs(lineSpreadRef))blendW=isNBA?0.48:0.65;
-    adjSpread=Math.round((lineSpreadRef+(rawRecSpread-lineSpreadRef)*blendW)*10)/10;
+    var lineSpreadRef3=g.favHome?-Math.abs(g.spread):Math.abs(g.spread);
+    var blendW=isNBA?0.30:0.40;
+    if(Math.abs(rawRecSpread)<Math.abs(lineSpreadRef3))blendW=isNBA?0.40:0.55;
+    adjSpread=Math.round((lineSpreadRef3+(rawRecSpread-lineSpreadRef3)*blendW)*10)/10;
     adjTotal=g.total;
   }
   var aLeaders=(g.teamLeaders&&g.teamLeaders.away)||[];
@@ -671,9 +710,37 @@ function analyze(g){
     if(g.spread>=10)conf+=6;
   }
 
-
-
-  if(hasEff&&spreadEdge>=0.5){conf+=6;signalCount++;}
+  if(modelTier==='fourFactors'){
+    if(spreadEdge>=0.5){conf+=10;signalCount++;}
+    if(spreadEdge>=1.5){conf+=6;signalCount++;}
+    if(ffResult){
+      var ffAwayAdv=ffResult.awayEFG-ffResult.homeEFG;
+      var ffTOAdv=ffResult.homeTO-ffResult.awayTO;
+      var ffFactorCount=0;
+      if(spreadSide==='away'){
+        if(ffAwayAdv>0.01)ffFactorCount++;
+        if(ffTOAdv>0.01)ffFactorCount++;
+        if(ffResult.awayORB>ffResult.homeORB)ffFactorCount++;
+        if(ffResult.awayFTR>ffResult.homeFTR)ffFactorCount++;
+      }else{
+        if(ffAwayAdv<-0.01)ffFactorCount++;
+        if(ffTOAdv<-0.01)ffFactorCount++;
+        if(ffResult.homeORB>ffResult.awayORB)ffFactorCount++;
+        if(ffResult.homeFTR>ffResult.awayFTR)ffFactorCount++;
+      }
+      if(ffFactorCount>=3){conf+=12;signalCount++;}
+      else if(ffFactorCount>=2){conf+=6;signalCount++;}
+      else if(ffFactorCount<=1&&spreadEdge<2){conf-=8;}
+    }
+    if(matchupResult){
+      var pickMatchup=spreadSide==='away'?matchupResult.away:matchupResult.home;
+      if(pickMatchup.totalEdge>0.03){conf+=8;signalCount++;}
+      else if(pickMatchup.totalEdge>0.01){conf+=4;}
+      else if(pickMatchup.totalEdge<-0.03){conf-=6;}
+    }
+  }else if(modelTier==='efficiency'&&spreadEdge>=0.5){
+    conf+=6;signalCount++;
+  }
 
   if(spreadEdge>=4){conf+=35;signalCount++;}
   else if(spreadEdge>=3){conf+=28;signalCount++;}
@@ -833,25 +900,25 @@ function analyze(g){
   if(gotCLV&&rlm)conf+=3;
 
   if(spreadEdge>=1.5&&pickEV>0)conf+=3;
-  if(pickEV>0&&hasEff&&spreadEdge>=1)conf+=3;
+  if(pickEV>0&&(modelTier==='fourFactors'||hasEff)&&spreadEdge>=1)conf+=3;
 
   if(signalCount>=7)conf+=8;
   else if(signalCount>=5)conf+=4;
 
-  var sit=g._sit||{};
-  if(sit.momentumAdv){
-    var mAbs=Math.abs(sit.momentumAdv);
-    var mFavorsHome=sit.momentumAdv>0;
+  var sit2=g._sit||{};
+  if(sit2.momentumAdv){
+    var mAbs=Math.abs(sit2.momentumAdv);
+    var mFavorsHome=sit2.momentumAdv>0;
     var mAligned=(mFavorsHome&&spreadSide==='home')||(!mFavorsHome&&spreadSide==='away');
     if(mAligned&&mAbs>=2){conf+=10;signalCount++;}
     else if(mAligned&&mAbs>=1){conf+=5;}
     else if(!mAligned&&mAbs>=2){conf-=6;}
   }
-  if(sit.confTournament&&!isNBA){
+  if(sit2.confTournament&&!isNBA){
     if(spreadEdge>=1)conf+=4;
     if(pickIsDog&&spreadEdge>=0.5)conf+=6;
   }
-  if(!isNBA&&sit.homeCourtBoost>=1.5&&spreadSide==='home'){conf+=6;signalCount++;}
+  if(!isNBA&&sit2.homeCourtBoost>=1.5&&spreadSide==='home'){conf+=6;signalCount++;}
 
   if(!isNBA){
     var cbbMult=0.93;
@@ -868,6 +935,17 @@ function analyze(g){
   var oppTeamWP=qWP(spreadSide==="away"?g.hRec:g.aRec);
   if(spreadSide!=="none"&&pickTeamWP<0.45&&oppTeamWP<0.45){conf=Math.round(conf*0.60);}
   else if(spreadSide!=="none"&&pickTeamWP<0.42){conf=Math.round(conf*0.82);}
+
+  if(modelTier==='record'){
+    conf=Math.round(conf*0.75);
+    conf=Math.min(conf,72);
+  }else if(modelTier==='efficiency'){
+    conf=Math.min(conf,88);
+  }
+
+  if(signalCount<2&&spreadEdge<1.5&&!rlm&&!steam){
+    conf=Math.min(conf,55);
+  }
 
   conf=Math.min(conf,95);
   var bet;
@@ -962,6 +1040,7 @@ function analyze(g){
     totalEdge:totalEdge,totalSide:totalSide,totalPlay:totalPlay,rlm:rlm,steam:steam,aInj:aInj,hInj:hInj,
     aMLEdge:aMLEdge,hMLEdge:hMLEdge,bestMLEdge:bestMLEdge,mlPlay:mlPlay,conf:conf,bet:bet,aATS:aATS,hATS:hATS,topPick:topPick,picks:picks,lineMv:lineMv,signalCount:signalCount,
     pickIsDog:pickIsDog,valuePlay:valuePlay,pickML:pickML,pickEV:pickEV,mlEV:mlEV,isContrarian:isContrarian,sharpPlay:sharpPlay,fadePlay:fadePlay,trapGame:trapGame,pickPub:pickPub,clv:clv,gotCLV:gotCLV,contrarianFlip:contrarianFlip,oppBestOut:oppBestOut,
+    modelTier:modelTier,ffResult:ffResult,matchupResult:matchupResult,
     sitMomentum:sit.momentumAdv||0,sitConfTournament:sit.confTournament||false,isDogHome:pickIsDog&&spreadSide==='home'&&g.favAway});
 }
 
@@ -977,6 +1056,8 @@ function betCell(g){
 function signals(g){
   var b='';
   var parts=[];
+  if(g.modelTier==='fourFactors')parts.push('<span class="badge" style="background:#00e67622;color:#00e676;border:1px solid #00e67644;font-weight:800">\uD83D\uDCC8 FOUR FACTORS</span>');
+  else if(g.modelTier==='efficiency')parts.push('<span class="badge" style="background:#64b5f622;color:#64b5f6;border:1px solid #64b5f644">EFFICIENCY</span>');
   if(g.sharpPlay)parts.push('<span class="badge" style="background:#e040fb22;color:#e040fb;border:1px solid #e040fb55;font-weight:800">\u2605 SHARP</span>');
   if(g.fadePlay)parts.push('<span class="badge" style="background:#ff520022;color:#ff5252;border:1px solid #ff525255;font-weight:800">FADE '+g.pickPub+'%pub</span>');
   if(g.trapGame)parts.push('<span class="badge" style="background:#ff170022;color:#ff1744;border:1px solid #ff174455;font-weight:800">\u26A0 TRAP</span>');
@@ -1591,6 +1672,218 @@ async function fetchInjuriesDirect(games){
     }
   });
   try{localStorage.setItem('injCache_'+TODAY.toDateString(),JSON.stringify(injCache));}catch(e){}
+}
+
+var TEAM_STATS_CACHE={};
+var TEAM_STATS_TTL=2*60*60*1000;
+
+async function fetchTeamStats(games){
+  var timeout=3000;
+  function fetchT(url){
+    return Promise.race([
+      fetch(url).then(function(r){if(!r.ok)throw new Error(r.status);return r.json()}),
+      new Promise(function(_,rej){setTimeout(function(){rej(new Error('timeout'))},timeout)})
+    ]);
+  }
+  var teamFetches=[];
+  games.forEach(function(g){
+    if(g.espnAwayId)teamFetches.push({g:g,side:'away',id:g.espnAwayId,league:g.league});
+    if(g.espnHomeId)teamFetches.push({g:g,side:'home',id:g.espnHomeId,league:g.league});
+  });
+  var BATCH=8;
+  for(var i=0;i<teamFetches.length;i+=BATCH){
+    var batch=teamFetches.slice(i,i+BATCH);
+    var results=await Promise.allSettled(batch.map(function(t){
+      var ck='ts_'+t.id;
+      if(TEAM_STATS_CACHE[ck]&&Date.now()-TEAM_STATS_CACHE[ck].ts<TEAM_STATS_TTL){
+        return Promise.resolve({t:t,data:TEAM_STATS_CACHE[ck].data,cached:true});
+      }
+      var sport=t.league==='NBA'?'basketball/nba':'basketball/mens-college-basketball';
+      var url='https://site.api.espn.com/apis/site/v2/sports/'+sport+'/teams/'+t.id+'/statistics';
+      return fetchT(url).then(function(d){
+        TEAM_STATS_CACHE[ck]={ts:Date.now(),data:d};
+        return{t:t,data:d,cached:false};
+      });
+    }));
+    results.forEach(function(r){
+      if(r.status!=='fulfilled'||!r.value)return;
+      var res=r.value;
+      var g=res.t.g;
+      var side=res.t.side;
+      var d=res.data;
+      var stats=parseTeamStatsResponse(d);
+      if(!stats)return;
+      if(!g.teamStats)g.teamStats={};
+      g.teamStats[side]=stats;
+    });
+  }
+  console.log('Team stats fetched for '+teamFetches.length+' teams');
+}
+
+function parseTeamStatsResponse(d){
+  if(!d)return null;
+  var raw={};
+  function extractStats(statsArray){
+    if(!statsArray)return;
+    if(Array.isArray(statsArray)){
+      statsArray.forEach(function(cat){
+        if(cat.stats){
+          cat.stats.forEach(function(s){
+            var key=(s.abbreviation||s.name||s.label||'').toUpperCase();
+            var val=parseFloat(s.displayValue||s.value);
+            if(key&&!isNaN(val))raw[key]=val;
+          });
+        }
+        if(cat.splits&&cat.splits.categories){
+          cat.splits.categories.forEach(function(sc){
+            if(sc.stats)sc.stats.forEach(function(s){
+              var key=(s.abbreviation||s.name||s.label||'').toUpperCase();
+              var val=parseFloat(s.displayValue||s.value);
+              if(key&&!isNaN(val))raw[key]=val;
+            });
+          });
+        }
+      });
+    }
+    if(statsArray.splits&&statsArray.splits.categories){
+      statsArray.splits.categories.forEach(function(cat){
+        if(cat.stats)cat.stats.forEach(function(s){
+          var key=(s.abbreviation||s.name||s.label||'').toUpperCase();
+          var val=parseFloat(s.displayValue||s.value);
+          if(key&&!isNaN(val))raw[key]=val;
+        });
+      });
+    }
+  }
+  if(d.results&&d.results.stats)extractStats(d.results.stats);
+  if(d.results&&d.results.statistics)extractStats(d.results.statistics);
+  if(d.statistics)extractStats(d.statistics);
+  if(d.stats)extractStats(d.stats);
+  if(d.splits&&d.splits.categories){
+    d.splits.categories.forEach(function(cat){
+      if(cat.stats)cat.stats.forEach(function(s){
+        var key=(s.abbreviation||s.name||s.label||'').toUpperCase();
+        var val=parseFloat(s.displayValue||s.value);
+        if(key&&!isNaN(val))raw[key]=val;
+      });
+    });
+  }
+  var ppg=raw['PTS']||raw['PPG']||raw['AVGPOINTS']||raw['POINTSPERGAME']||0;
+  var rpg=raw['REB']||raw['RPG']||raw['AVGREBOUNDS']||raw['REBOUNDSPERGAME']||0;
+  var apg=raw['AST']||raw['APG']||raw['AVGASSISTS']||raw['ASSISTSPERGAME']||0;
+  var tpg=raw['TO']||raw['TOV']||raw['TPG']||raw['TURNOVERS']||raw['TURNOVERSPERGAME']||0;
+  var spg=raw['STL']||raw['SPG']||raw['STEALSPERGAME']||0;
+  var bpg=raw['BLK']||raw['BPG']||raw['BLOCKSPERGAME']||0;
+  var fgPct=raw['FG%']||raw['FG_PCT']||raw['FGPCT']||raw['FIELDGOALPCT']||0;
+  var fg3Pct=raw['3P%']||raw['3PT%']||raw['FG3PCT']||raw['FG3_PCT']||raw['THREEPOINTERSFIELDGOALPCT']||raw['3FG%']||0;
+  var ftPct=raw['FT%']||raw['FT_PCT']||raw['FTPCT']||raw['FREETHROWPCT']||0;
+  var fga=raw['FGA']||raw['FIELDGOALSATTEMPTED']||raw['FGATTEMPTED']||0;
+  var fgm=raw['FGM']||raw['FIELDGOALSMADE']||raw['FGMADE']||0;
+  var fg3a=raw['3PA']||raw['3PTA']||raw['FG3A']||raw['THREEPOINTERSFIELDGOALSATTEMPTED']||raw['3FGA']||0;
+  var fg3m=raw['3PM']||raw['3PTM']||raw['FG3M']||raw['THREEPOINTERSFIELDGOALSMADE']||raw['3FGM']||0;
+  var fta=raw['FTA']||raw['FREETHROWSATTEMPTED']||0;
+  var ftm=raw['FTM']||raw['FREETHROWSMADE']||0;
+  var orb=raw['OREB']||raw['ORB']||raw['OFFENSIVEREBOUNDS']||raw['OFFREB']||0;
+  var drb=raw['DREB']||raw['DRB']||raw['DEFENSIVEREBOUNDS']||raw['DEFREB']||0;
+  var oppPpg=raw['OPPPTS']||raw['OPPPPG']||raw['OPPPOINTSPERGAME']||raw['OPPAVGPOINTS']||0;
+  var pace=raw['PACE']||raw['POSSESSIONS']||raw['POSS']||0;
+  if(fgPct>1)fgPct=fgPct/100;
+  if(fg3Pct>1)fg3Pct=fg3Pct/100;
+  if(ftPct>1)ftPct=ftPct/100;
+  if(fgPct===0&&fgm>0&&fga>0)fgPct=fgm/fga;
+  if(fg3Pct===0&&fg3m>0&&fg3a>0)fg3Pct=fg3m/fg3a;
+  if(ftPct===0&&ftm>0&&fta>0)ftPct=ftm/fta;
+  var eFG=0;
+  if(fga>0)eFG=(fgm+0.5*fg3m)/fga;
+  else if(fgPct>0&&fg3Pct>0)eFG=fgPct+0.5*(fg3a/Math.max(fga,1))*fg3Pct;
+  else eFG=fgPct;
+  var toPct=0;
+  if(fga>0||fta>0||tpg>0)toPct=tpg/(fga+0.44*fta+tpg);
+  var orbPct=0;
+  if(orb>0&&drb>0)orbPct=orb/(orb+drb);
+  else if(orb>0&&rpg>0)orbPct=orb/rpg;
+  var ftRate=0;
+  if(fga>0)ftRate=fta/fga;
+  else if(ftm>0&&ppg>0)ftRate=fta/Math.max(fga,ppg/1.1);
+  return{
+    ppg:ppg,rpg:rpg,apg:apg,tpg:tpg,spg:spg,bpg:bpg,
+    fgPct:fgPct,fg3Pct:fg3Pct,ftPct:ftPct,
+    fga:fga,fgm:fgm,fg3a:fg3a,fg3m:fg3m,fta:fta,ftm:ftm,
+    orb:orb,drb:drb,
+    eFG:eFG,toPct:toPct,orbPct:orbPct,ftRate:ftRate,
+    oppPpg:oppPpg,pace:pace,
+    raw:raw
+  };
+}
+
+function fourFactorsProject(offStats,defStats,isNBA){
+  var leagueAvg=isNBA?{eFG:0.470,toPct:0.125,orbPct:0.26,ftRate:0.23,ppg:112,pace:100}:
+                       {eFG:0.440,toPct:0.165,orbPct:0.28,ftRate:0.27,ppg:72,pace:68};
+  var oEFG=offStats.eFG||leagueAvg.eFG;
+  var oTO=offStats.toPct||leagueAvg.toPct;
+  var oORB=offStats.orbPct||leagueAvg.orbPct;
+  var oFTR=offStats.ftRate||leagueAvg.ftRate;
+  var dEFG=defStats.eFG||leagueAvg.eFG;
+  var dTO=defStats.toPct||leagueAvg.toPct;
+  var dORB=defStats.orbPct||leagueAvg.orbPct;
+  var dFTR=defStats.ftRate||leagueAvg.ftRate;
+  var adjEFG=(oEFG+dEFG)/2;
+  var adjTO=(oTO+dTO)/2;
+  var adjORB=(oORB+dORB)/2;
+  var adjFTR=(oFTR+dFTR)/2;
+  var oPace=offStats.pace||leagueAvg.pace;
+  var dPace=defStats.pace||leagueAvg.pace;
+  var gamePace=(oPace+dPace)/2;
+  var shotPoss=gamePace*(1-adjTO);
+  var fga_est=shotPoss;
+  var fta_est=fga_est*adjFTR;
+  var fgm_est=fga_est*adjEFG;
+  var orb_est=fga_est*(1-adjEFG)*adjORB;
+  var secondChance=orb_est*adjEFG;
+  var pts_est=(fgm_est+secondChance)*2+fta_est*0.75;
+  if(pts_est<leagueAvg.ppg*0.6)pts_est=leagueAvg.ppg*0.85;
+  if(pts_est>leagueAvg.ppg*1.5)pts_est=leagueAvg.ppg*1.15;
+  return{pts:pts_est,pace:gamePace,eFG:adjEFG,toPct:adjTO,orbPct:adjORB,ftRate:adjFTR};
+}
+
+function computeFourFactorsEdge(offA,defA,offH,defH,isNBA){
+  var awayProj=fourFactorsProject(offA,defH,isNBA);
+  var homeProj=fourFactorsProject(offH,defA,isNBA);
+  return{
+    awayPts:awayProj.pts,
+    homePts:homeProj.pts,
+    gamePace:(awayProj.pace+homeProj.pace)/2,
+    awayEFG:awayProj.eFG,homeEFG:homeProj.eFG,
+    awayTO:awayProj.toPct,homeTO:homeProj.toPct,
+    awayORB:awayProj.orbPct,homeORB:homeProj.orbPct,
+    awayFTR:awayProj.ftRate,homeFTR:homeProj.ftRate,
+    rawSpread:awayProj.pts-homeProj.pts,
+    rawTotal:awayProj.pts+homeProj.pts
+  };
+}
+
+function matchupVulnerability(offStats,defStats){
+  var edges=[];
+  if(offStats.fg3Pct>0&&defStats.fg3Pct>0){
+    var diff=offStats.fg3Pct-defStats.fg3Pct;
+    if(Math.abs(diff)>0.02)edges.push({factor:'3PT',edge:diff,desc:diff>0?'Good 3PT shooting vs weak perimeter D':'Poor 3PT shooting vs strong perimeter D'});
+  }
+  if(offStats.tpg>0&&defStats.spg>0){
+    var toRisk=offStats.tpg-defStats.spg;
+    if(offStats.tpg>15&&defStats.spg>8)edges.push({factor:'TO_RISK',edge:-0.03,desc:'Turnover-prone vs active hands defense'});
+    if(offStats.tpg<12&&defStats.spg<6)edges.push({factor:'TO_SAFE',edge:0.02,desc:'Ball-secure offense vs passive D'});
+  }
+  if(offStats.orb>0&&defStats.drb>0){
+    var orbAdv=offStats.orb/(offStats.orb+defStats.drb);
+    if(orbAdv>0.32)edges.push({factor:'ORB',edge:0.03,desc:'Strong offensive boards vs weak DRB'});
+    if(orbAdv<0.22)edges.push({factor:'ORB_WEAK',edge:-0.02,desc:'Weak offensive boards vs strong DRB'});
+  }
+  if(offStats.ftRate>0&&defStats.ftRate>0){
+    if(offStats.ftRate>0.30&&defStats.ftRate>0.28)edges.push({factor:'FT_DRAW',edge:0.02,desc:'Draws fouls vs foul-prone D'});
+  }
+  var totalEdge=0;
+  edges.forEach(function(e){totalEdge+=e.edge;});
+  return{edges:edges,totalEdge:totalEdge};
 }
 
 async function fetchLiveProps(games){
@@ -2611,6 +2904,12 @@ async function loadData(isAutoRefresh){
   fetchInjuriesDirect(gamesWithIds).then(function(){
     reAnalyze();
     document.getElementById('lastUpdate').textContent='Last updated: '+new Date().toLocaleTimeString()+' (injuries loaded)';
+    fetchTeamStats(GAMES).then(function(){
+      reAnalyze();
+      document.getElementById('lastUpdate').textContent='Last updated: '+new Date().toLocaleTimeString()+' (stats loaded)';
+      var statCount=GAMES.filter(function(g){return g.teamStats&&g.teamStats.away&&g.teamStats.home}).length;
+      console.log('Four Factors model active for '+statCount+'/'+GAMES.length+' games');
+    }).catch(function(e){console.log('Team stats fetch failed:',e);});
   }).catch(function(e){console.log('Injuries failed:',e);});
 
   var realLines=[];
