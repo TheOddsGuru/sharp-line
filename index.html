@@ -3751,6 +3751,7 @@ async function loadData(isAutoRefresh){
   document.getElementById('dataSource').textContent='Source: '+source;
   snapshotPicks();
   renderTopPicks();renderAll();renderBets();renderTotals();renderParlay();if(RESULTS_UNLOCKED)renderXPost();
+  renderResults();renderDailyWL();
   fetchUFCFights().then(function(res){UFC_FIGHTS=res.fights;UFC_EVENT_NAME=res.eventName;renderUFC();}).catch(function(e){});
 
   function reAnalyze(){
@@ -3880,7 +3881,10 @@ function snapshotPicks(){
   var picks=[];
   ALL.forEach(function(g){
     var displayConf=(g.topPick&&g.topPick.conf)?g.topPick.conf:g.conf;
-    if(g.bet==='YES'&&displayConf>=95){
+    if(g.bet!=='YES')return;
+    if(displayConf<78)return;
+    var hasSharpSignal=g.rlm||g.steam||g.sharpPlay||g.fadePlay||g.valuePlay||g.oppBestOut||g.gotCLV;
+    if(!hasSharpSignal&&g.signalCount<3)return;
       var spreadPick=null;
       if(g.spreadSide==='away'){
         spreadPick={team:g.away,side:'away',spread:g.favAway?-g.spread:g.spread,ml:g.awayML};
@@ -3893,13 +3897,12 @@ function snapshotPicks(){
       }
       picks.push({
         league:g.league,away:g.away,home:g.home,time:g.time,
-        bet:g.bet,conf:g.conf,spreadPick:spreadPick,totalPick:totalPick,
+        bet:g.bet,conf:displayConf,spreadPick:spreadPick,totalPick:totalPick,
         topPick:g.topPick?{type:g.topPick.type,label:g.topPick.label,edge:g.topPick.edge}:null,
         spread:g.spread,total:g.total,favHome:g.favHome,favAway:g.favAway,
         espnEventId:g.espnEventId||null,
         pickIsDog:g.pickIsDog,pickML:g.pickML,pickEV:g.pickEV
       });
-    }
   });
   if(picks.length>0){
     try{localStorage.setItem(storeKey,JSON.stringify({ts:Date.now(),picks:picks}));}catch(e){}
@@ -4124,44 +4127,124 @@ function renderResultsTable(results,dateLabel){
   return h;
 }
 
+function getLiveTopPicks(){
+  if(!ALL||ALL.length===0)return[];
+  return ALL.filter(function(g){
+    var c=(g.topPick&&g.topPick.conf)?g.topPick.conf:g.conf;
+    if(g.bet!=='YES')return false;
+    if(c<78)return false;
+    var hasSharpSignal=g.rlm||g.steam||g.sharpPlay||g.fadePlay||g.valuePlay||g.oppBestOut||g.gotCLV;
+    if(!hasSharpSignal&&g.signalCount<3)return false;
+    return true;
+  }).sort(function(a,b){
+    var ac=(a.topPick&&a.topPick.conf)?a.topPick.conf:a.conf;
+    var bc=(b.topPick&&b.topPick.conf)?b.topPick.conf:b.conf;
+    return bc-ac;
+  });
+}
+
 async function renderResults(){
   var el=document.getElementById('results');
-  el.innerHTML='<div class="loading"><span class="spinner"></span> Grading yesterday\'s picks...</div>';
-  var yesterday=getYesterday();
-  var yesterdayStr=yesterday.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
-  var results=await gradeDay(yesterday);
-  var histDates=getHistoryDates();
-  var allGraded=[];
-  for(var i=0;i<histDates.length;i++){
-    var dr=await gradeDay(histDates[i]);
-    allGraded=allGraded.concat(dr);
-  }
-  var h2='<h3 style="color:#00e5ff;margin:0 0 10px;font-size:1em">RESULTS TRACKER \u2014 Best Bets Only <span style="color:#455a64;font-size:.65em;font-weight:400">(95%+ confidence)</span></h3>';
-  h2+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">';
-  h2+='<span style="color:#78909c;font-size:.78em">Tracking ATS results for Best Bets only (95%+ confidence picks)</span>';
-  h2+='<div><button onclick="refreshResults()" style="background:#00e5ff;color:#0a0e17;border:none;padding:5px 14px;border-radius:4px;font-weight:700;cursor:pointer;font-size:.78em;margin-right:6px">Refresh Scores</button></div>';
-  h2+='</div>';
-  if(allGraded.length>0){
-    h2+=renderResultsSummary(allGraded);
-  }
-  h2+=renderResultsTable(results,yesterdayStr);
-  if(histDates.length>1){
-    h2+='<details style="margin-top:14px"><summary style="color:#00e5ff;cursor:pointer;font-size:.85em;font-weight:700">Older Results ('+histDates.length+' days)</summary>';
-    for(var j=1;j<histDates.length;j++){
-      var oldDate=histDates[j];
-      var oldLabel=oldDate.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
-      var oldResults=getStoredResults(oldDate.toDateString())||[];
-      h2+=renderResultsTable(oldResults,oldLabel);
+  el.innerHTML='<div class="loading"><span class="spinner"></span> Loading results...</div>';
+  try{
+    var yesterday=getYesterday();
+    var yesterdayStr=yesterday.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+    var results=[];
+    try{results=await gradeDay(yesterday);}catch(e){console.error('gradeDay error:',e);}
+    var histDates=getHistoryDates();
+    var allGraded=[];
+    for(var i=0;i<histDates.length;i++){
+      try{var dr=await gradeDay(histDates[i]);allGraded=allGraded.concat(dr);}catch(e){}
     }
-    h2+='</details>';
-  }
-  if(allGraded.length===0){
-    h2+='<div style="background:#141828;border:1px solid #2a3040;border-radius:8px;padding:20px;margin-top:14px;text-align:center">';
-    h2+='<p style="color:#78909c;margin-bottom:8px">No results to show yet.</p>';
-    h2+='<p style="color:#455a64;font-size:.78em">The model automatically saves today\'s Best Bets (95%+ confidence). Tomorrow, this page will grade them against final scores from ESPN and show your W-L record, units, and ROI.</p>';
+    var h2='<h3 style="color:#00e5ff;margin:0 0 10px;font-size:1em">RESULTS TRACKER \u2014 Top Picks <span style="color:#455a64;font-size:.65em;font-weight:400">(78%+ confidence w/ sharp signals)</span></h3>';
+    h2+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">';
+    h2+='<span style="color:#78909c;font-size:.78em">Tracking ATS results for all Top Picks (78%+ confidence with confirmed sharp signals)</span>';
+    h2+='<div><button onclick="refreshResults()" style="background:#00e5ff;color:#0a0e17;border:none;padding:5px 14px;border-radius:4px;font-weight:700;cursor:pointer;font-size:.78em;margin-right:6px">Refresh Scores</button></div>';
     h2+='</div>';
+    if(allGraded.length>0){
+      h2+=renderResultsSummary(allGraded);
+    }
+    var todayPicks=getLiveTopPicks();
+    var isTopTier=true;
+    if(todayPicks.length===0&&ALL&&ALL.length>0){
+      todayPicks=ALL.filter(function(g){return g.bet==='YES'}).sort(function(a,b){return b.conf-a.conf});
+      isTopTier=false;
+    }
+    if(todayPicks.length>0){
+      var todayStr=TODAY.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+      var tierLabel=isTopTier?'\ud83d\udd25 TODAY \u2014 '+todayStr+' \u2014 '+todayPicks.length+' live pick'+(todayPicks.length===1?'':'s'):'\ud83d\udcca TODAY \u2014 '+todayStr+' \u2014 '+todayPicks.length+' YES pick'+(todayPicks.length===1?'':'s')+' <span style="color:#455a64;font-size:.75em">(all model YES bets)</span>';
+      h2+='<h4 style="color:'+(isTopTier?'#ffd600':'#00e5ff')+';margin:10px 0 8px;font-size:.85em">'+tierLabel+'</h4>';
+      h2+='<div class="scroll-wrap"><table><thead><tr><th>Status</th><th>Grade</th><th>Game</th><th>Pick</th><th>Conf</th><th>Edge</th><th>Signals</th></tr></thead><tbody>';
+      todayPicks.forEach(function(g){
+        var c=(g.topPick&&g.topPick.conf)?g.topPick.conf:g.conf;
+        var pickLabel=g.topPick?g.topPick.label:'--';
+        var pickEdge=g.topPick?(g.topPick.edge+(g.topPick.unit||'')):'--';
+        var sigs=[];
+        if(g.rlm)sigs.push('<span class="badge badge-rlm">RLM</span>');
+        if(g.steam)sigs.push('<span class="badge badge-steam">STEAM</span>');
+        if(g.valuePlay)sigs.push('<span class="badge badge-val">VALUE</span>');
+        if(g.sharpPlay)sigs.push('<span class="badge badge-rlm">SHARP</span>');
+        if(g.fadePlay)sigs.push('<span class="badge badge-steam">FADE</span>');
+        var statusColor=isTopTier?'#ffeb3b':'#80cbc4';
+        var statusText=isTopTier?'LIVE':'YES';
+        h2+='<tr><td><span style="color:'+statusColor+';font-weight:700">'+statusText+'</span></td>';
+        h2+='<td><div class="bet-yes" style="padding:2px 6px;font-size:.75em">YES</div></td>';
+        h2+='<td>'+g.away+' @ '+g.home+'<br><span style="color:#455a64;font-size:.7em">'+g.league+' '+(g.time||'')+'</span></td>';
+        h2+='<td class="play-cell" style="color:'+(isTopTier?'#ffd600':'#b2dfdb')+'">'+pickLabel+'</td>';
+        h2+='<td>'+c+'%</td>';
+        h2+='<td>'+pickEdge+'</td>';
+        h2+='<td>'+(sigs.length>0?sigs.join(' '):'<span style="color:#455a64">--</span>')+'</td>';
+        h2+='</tr>';
+      });
+      h2+='</tbody></table></div>';
+    }
+    h2+=renderResultsTable(results,yesterdayStr);
+    if(histDates.length>1){
+      h2+='<details style="margin-top:14px"><summary style="color:#00e5ff;cursor:pointer;font-size:.85em;font-weight:700">Older Results ('+histDates.length+' days)</summary>';
+      for(var j=1;j<histDates.length;j++){
+        var oldDate=histDates[j];
+        var oldLabel=oldDate.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+        var oldResults=getStoredResults(oldDate.toDateString())||[];
+        h2+=renderResultsTable(oldResults,oldLabel);
+      }
+      h2+='</details>';
+    }
+    if(allGraded.length===0&&todayPicks.length===0){
+      if(!ALL||ALL.length===0){
+        h2+='<div style="background:#141828;border:1px solid #2a3040;border-radius:8px;padding:20px;margin-top:14px;text-align:center">';
+        h2+='<p style="color:#78909c;margin-bottom:8px">Loading games... picks will appear once data loads.</p>';
+        h2+='</div>';
+      }else{
+        h2+='<div style="background:#141828;border:1px solid #2a3040;border-radius:8px;padding:20px;margin-top:14px;text-align:center">';
+        h2+='<p style="color:#78909c;margin-bottom:8px">No model picks today (no games with YES rating found).</p>';
+        h2+='</div>';
+      }
+    }
+    el.innerHTML=h2;
+  }catch(err){
+    console.error('renderResults error:',err);
+    var todayPicks2=getLiveTopPicks();
+    if(todayPicks2.length===0&&ALL&&ALL.length>0){
+      todayPicks2=ALL.filter(function(g){return g.bet==='YES'}).sort(function(a,b){return b.conf-a.conf});
+    }
+    if(todayPicks2.length>0){
+      var h3='<h3 style="color:#00e5ff;margin:0 0 10px;font-size:1em">RESULTS TRACKER</h3>';
+      h3+='<h4 style="color:#ffd600;margin:10px 0 8px;font-size:.85em">\ud83d\udd25 TODAY \u2014 '+todayPicks2.length+' picks</h4>';
+      h3+='<div class="scroll-wrap"><table><thead><tr><th>Status</th><th>Game</th><th>Pick</th><th>Conf</th></tr></thead><tbody>';
+      todayPicks2.forEach(function(g){
+        var c=(g.topPick&&g.topPick.conf)?g.topPick.conf:g.conf;
+        var pickLabel=g.topPick?g.topPick.label:'--';
+        h3+='<tr><td><span style="color:#ffeb3b;font-weight:700">LIVE</span></td>';
+        h3+='<td>'+g.away+' @ '+g.home+'</td>';
+        h3+='<td style="color:#ffd600">'+pickLabel+'</td>';
+        h3+='<td>'+c+'%</td></tr>';
+      });
+      h3+='</tbody></table></div>';
+      el.innerHTML=h3;
+    }else{
+      el.innerHTML='<h3 style="color:#00e5ff;margin:0 0 10px;font-size:1em">RESULTS TRACKER</h3><p style="color:#78909c">Waiting for game data to load...</p>';
+    }
   }
-  el.innerHTML=h2;
 }
 
 async function handlePin(){
@@ -4335,7 +4418,7 @@ async function renderDailyWL(){
   var roi=(totalW+totalL)>0?Math.round(totalUnits/(totalW+totalL)*1000)/10:0;
 
   var h='<div class="cal-wrap">';
-  h+='<div class="cal-header"><h3>DAILY W/L TRACKER <span style="color:#455a64;font-size:.65em;font-weight:400">(95%+ Confidence Only)</span></h3>';
+  h+='<div class="cal-header"><h3>DAILY W/L TRACKER <span style="color:#455a64;font-size:.65em;font-weight:400">(Top Picks — 78%+ Confidence)</span></h3>';
   h+='<div class="cal-filter">';
   h+='<select onchange="DWL_FILTER=this.value;renderDailyWL()">';
   h+='<option value="ALL"'+(DWL_FILTER==='ALL'?' selected':'')+'>All Leagues</option>';
