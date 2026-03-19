@@ -700,11 +700,8 @@ function analyze(g){
     var pickingFav=(spreadSide==="home"&&g.favHome)||(spreadSide==="away"&&g.favAway);
     if(pickingFav){
       var favPubPct=spreadSide==="home"?pubHome:pubAway;
-      if(g.spread>=10){
-        contrarianFlip=true;
-      }else if(g.spread>=7&&favPubPct>=60){
-        contrarianFlip=true;
-      }else if(g.spread>=5&&favPubPct>=70&&!g.pubEstimated){
+          var sharpOnDog=(rlm||steam||(lineMv>=1.5));
+      if(spreadEdge<1.5&&sharpOnDog&&favPubPct>=65&&!g.pubEstimated){
         contrarianFlip=true;
       }
     }
