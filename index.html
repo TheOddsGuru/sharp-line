@@ -1478,7 +1478,8 @@ function renderParlay(){
   function recWP(rec){if(!rec)return 0.5;var p=rec.match(/(\d+)-(\d+)/);if(!p)return 0.5;return(+p[1])/(+p[1]+ +p[2])||0.5;}
   function mlToDecimal(ml){return ml>0?1+(ml/100):1+(100/Math.abs(ml));}
   function decToAmerican(d){if(d>=2)return '+'+(Math.round((d-1)*100));return '-'+Math.round(100/(d-1));}
-  var picks=dogs.slice(0,4);
+  var picks=dogs.slice(0,3
+  );
   var parlayDecimal=1;
   picks.forEach(function(g){parlayDecimal*=mlToDecimal(g.pickML);});
   var parlayAmerican=picks.length>0?decToAmerican(parlayDecimal):'--';
